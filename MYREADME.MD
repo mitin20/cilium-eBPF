@@ -1,3 +1,4 @@
+# eBPF-based Networking, Observability, Security
 git clone https://github.com/mitin20/cilium-eBPF.git
 
 # init cluster
@@ -83,3 +84,114 @@ curl "silly-demo.$INGRESS_HOST.nip.io/videos" | jq .
 hubble observe --namespace production
 
 cilium hubble ui    
+
+################################################
+# Enforce Network Ingress Policies With Cilium #
+################################################
+
+kubectl --namespace production get services,ingresses
+
+kubectl --namespace production run not-silly-demo \
+    --rm -ti --restart='Never' \
+    --image docker.io/bitnami/postgresql \
+    --env PGPASSWORD=postgres \
+    --command -- sh
+
+psql --host postgresql -U postgres -d postgres -p 5432
+
+\l
+
+CREATE DATABASE "not-silly-demo";
+
+\l
+
+exit
+
+exit
+
+```kustomize/overlays/cilium-ingress/cnp-ingress.yaml
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: silly-demo-ingress
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: silly-demo
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+```
+
+kubectl kustomize --enable-helm \
+    kustomize/overlays/cilium-ingress \
+    | kubectl --namespace production apply --filename -
+
+kubectl --namespace production run not-silly-demo \
+    --rm -ti --restart='Never' \
+    --image docker.io/bitnami/postgresql \
+    --env PGPASSWORD=postgres \
+    --command -- sh
+
+psql --host postgresql -U postgres -d postgres -p 5432
+
+# Press `ctrl+c`
+
+exit
+
+curl "silly-demo.$INGRESS_HOST.nip.io/videos" | jq .
+
+
+###############################################
+# Enforce Network Egrees Policies With Cilium #
+###############################################
+
+curl "silly-demo.$INGRESS_HOST.nip.io/ping?url=http://devopstoolkitseries.com"
+
+curl "silly-demo.$INGRESS_HOST.nip.io/ping?url=http://google.com"
+
+```kustomize/overlays/cilium-egrees/cnp-egrees.yaml
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: silly-demo-egrees
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: silly-demo
+  egress:
+    - toFQDNs:
+      - matchName: "devopstoolkitseries.com"
+      - matchPattern: "*.devopstoolkitseries.com"
+    - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": production
+    - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": kube-system
+          "k8s:k8s-app": kube-dns
+      toPorts:
+      - ports:
+        - port: "53"
+          protocol: ANY
+        rules:
+          dns:
+            - matchPattern: "*"
+```
+
+kubectl kustomize --enable-helm \
+    kustomize/overlays/cilium-egrees \
+    | kubectl --namespace production apply --filename -
+
+curl "silly-demo.$INGRESS_HOST.nip.io/ping?url=http://devopstoolkitseries.com"
+
+curl "silly-demo.$INGRESS_HOST.nip.io/ping?url=http://google.com"
+
+# Press `ctrl+c`
+
+curl "silly-demo.$INGRESS_HOST.nip.io/videos" | jq .
